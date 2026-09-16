@@ -26,14 +26,6 @@ from .status import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Shadow `info` keys that mean "the official app is showing a notification for this device".
-SHADOW_NOTIFICATION_KEYS = (
-    "CleanNotification",
-    "CleanFilterNotification",
-    "CleanSecondaryFilterNotification",
-    "AntiMoldNotification",
-)
-
 
 class Peripheral:  # pragma: no cover
     """Peripheral (Device) Information.
@@ -743,24 +735,6 @@ class AWSThing:
         self._attention_reason = x
 
     @property
-    def notifications(self) -> dict[str, bool]:
-        """Notifications the official app shows for this device, read from the `info` shadow.
-
-        Returns
-        -------
-        dict of bool
-            Keys are `SHADOW_NOTIFICATION_KEYS` present in the shadow; empty when no shadow was read.
-        """
-
-        if not self._shadow:
-            return {}
-        return {
-            key: bool(self._shadow[key])
-            for key in SHADOW_NOTIFICATION_KEYS
-            if key in self._shadow
-        }
-
-    @property
     def brand(self) -> Optional[str]:
         """Device brand.
 
@@ -818,7 +792,14 @@ class AWSThing:
             Device model.
         """
 
-        return getattr(self._support_code, "Model", None)
+        model = getattr(self._support_code, "Model", None)
+        # Observed 2026-09-16 (RAD-series AC, FirmwareVersion 6.0.032): the cloud's
+        # registration/response carried "Model": "RAD-\xffR", i.e. the value is
+        # corrupted at the source. Return None rather than a string with control characters;
+        # the real model cannot be recovered from the payload.
+        if isinstance(model, str) and not model.isprintable():
+            return None
+        return model
 
     @property
     def name(self) -> str:
@@ -1045,8 +1026,8 @@ class JciHitachiAWSAPI:
         self._aws_tokens = conn.aws_tokens
         conn_status, self._aws_identity = conn.get_data()
         if conn_status != "OK":
-            raise JciHitachiAuthError(
-                f"An error occurred when retrieving the user identity: {conn_status}"
+            raise aws_connection.cognito_error(
+                conn_status, "An error occurred when retrieving the user identity"
             )
 
         conn = aws_connection.GetAllDevice(
@@ -1303,14 +1284,20 @@ class JciHitachiAWSAPI:
             )
             reason = next((f for f in failures if f is not None), None)
 
+            previous_reason = thing.attention_reason
             if reason is None:
+                if not thing.available and previous_reason is not None:
+                    _LOGGER.info(f"{name} is available again.")
                 thing.available = True
                 thing.attention_reason = None
             else:
                 thing.available = False
                 thing.attention_reason = reason
                 reasons.append(reason)
-                _LOGGER.warning(f"{name} is unavailable: {reason}")
+                # log on change only; a permanently failing device would otherwise
+                # produce one line per poll
+                if reason != previous_reason:
+                    _LOGGER.warning(f"{name} is unavailable: {reason}")
 
         if requested and len(reasons) == requested:
             raise JciHitachiDeviceError(" | ".join(reasons))
@@ -1344,11 +1331,11 @@ class JciHitachiAWSAPI:
             )
             if undecodable is not None:
                 topic, payload = undecodable
+                # Only what was observed: the topic answered and the bytes. What the frame
+                # means is unknown (seen as fc ff ff 1f 01 01 from RAD-series ACs, 2026-08/09).
                 return (
-                    f"{name} answered the {what} request on {kind}/response with an "
-                    f"undecodable payload (hex {payload.hex()}, not JSON). The device may need "
-                    f"attention in the official app (pending freeze-clean / filter notification) "
-                    f"or run a firmware whose protocol this library does not understand yet."
+                    f"{name} answered the {what} request on {kind}/response with a "
+                    f"payload that is not JSON (hex {payload.hex()}); its meaning is unknown."
                 )
             return f"An event occurred but wasn't accompanied with data when refreshing {name} {what}."
         return f"Timed out refreshing {name} {what}. Please ensure the device is online and avoid opening the official app."
@@ -1495,6 +1482,21 @@ class JciHitachiAWSAPI:
 
         if thing.thing_name in control_results:
             device_control = self._mqtt.mqtt_events.device_control.get(thing.thing_name)
+            if device_control is None:
+                # the event fired without JSON data: the device answered the control request
+                # with an undecodable payload (recorded in mqtt_events.device_undecodable)
+                undecodable = self._mqtt.mqtt_events.device_undecodable.get(
+                    thing.thing_name, {}
+                ).get("control")
+                _LOGGER.warning(
+                    f"{device_name} did not acknowledge {status_name}: "
+                    + (
+                        f"undecodable control response (hex {undecodable[1].hex()})"
+                        if undecodable
+                        else "control response carried no data"
+                    )
+                )
+                return False
             if device_control.get(status_name) == status_value:
                 thing.status_code.set_new_status(status_name, status_value)
                 return True

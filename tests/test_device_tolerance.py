@@ -57,7 +57,7 @@ class TestOnPublishUndecodable:
         mqtt._mqtt_events.device_support_event[thing] = threading.Event()
         mqtt._mqtt_events.mqtt_error_event.clear()
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG):
             mqtt._on_publish(topic, BINARY_FRAME, None, None, None)
 
         assert mqtt._mqtt_events.device_undecodable[thing] == {
@@ -172,12 +172,11 @@ class TestRefreshStatusPerDevice:
 
         thing_a, thing_b = api.things["Device A"], api.things["Device B"]
         assert thing_a.available is False
-        assert "undecodable payload (hex fcffff1f0101" in thing_a.attention_reason
-        assert "registration" in thing_a.attention_reason
+        assert "not JSON (hex fcffff1f0101)" in thing_a.attention_reason
+        assert "registration/response" in thing_a.attention_reason
         assert thing_a.support_code is None and thing_a.status_code is None
         # the shadow channel did answer, so it is kept even though the device failed
         assert thing_a.shadow == {"CleanNotification": True}
-        assert thing_a.notifications == {"CleanNotification": True}
         assert thing_b.available is True and thing_b.attention_reason is None
         assert thing_b.support_code is support and thing_b.status_code is status
 
@@ -215,16 +214,88 @@ class TestThingWithoutSupportCode:
         assert thing.model is None
         assert thing.firmware_version is None
         assert thing.firmware_code is None
-        assert thing.notifications == {}
-        thing.shadow = {
-            "CleanNotification": True,
-            "AntiMoldNotification": False,
-            "online": True,
+
+    def test_corrupted_model_string_is_reported_as_unknown(self):
+        # observed 2026-09-16 in a registration/response: "Model": "RAD-\xffR"
+        thing = _thing("Device A", GW_A)
+        thing.support_code = JciHitachiAWSStatusSupport(
+            {"DeviceType": 1, "Model": "RAD-�\x06\x01R", "FirmwareVersion": "6.0.032"}
+        )
+        assert thing.model is None
+        assert thing.firmware_version == "6.0.032"
+        thing.support_code = JciHitachiAWSStatusSupport(
+            {"DeviceType": 1, "Model": "RAD-90NF"}
+        )
+        assert thing.model == "RAD-90NF"
+
+
+class TestNoStaleAnswers:
+    def test_publish_forgets_the_previous_answer(self, mqtt):
+        """A request must not be satisfied by the answer to the previous one (good-then-frame)."""
+        thing = f"{IDENTITY}_{GW_A}"
+        mqtt._mqtt_events.device_status[thing] = JciHitachiAWSStatus({"DeviceType": 1})
+        mqtt._mqtt_events.device_support[thing] = JciHitachiAWSStatusSupport(
+            {"DeviceType": 1}
+        )
+        mqtt._mqtt_events.device_control[thing] = {"Switch": 1}
+        mqtt._mqtt_events.device_shadow[thing] = {"online": True}
+        with patch.object(mqtt, "_mqttc"), patch.object(mqtt, "_shadow_mqttc"):
+            mqtt.publish(IDENTITY, thing, "status")
+            mqtt.publish(IDENTITY, thing, "support")
+            mqtt.publish(IDENTITY, thing, "control", payload={})
+            mqtt.publish_shadow(thing, "get", shadow_name="info")
+        for pool in (
+            mqtt._execution_pools.status_execution_pool,
+            mqtt._execution_pools.support_execution_pool,
+            mqtt._execution_pools.control_execution_pool,
+            mqtt._execution_pools.shadow_execution_pool,
+        ):
+            for coro in pool:
+                coro.close()
+            pool.clear()
+        assert thing not in mqtt._mqtt_events.device_status
+        assert thing not in mqtt._mqtt_events.device_support
+        assert thing not in mqtt._mqtt_events.device_control
+        assert thing not in mqtt._mqtt_events.device_shadow
+
+    def test_set_status_returns_false_on_undecodable_control_answer(self, api, caplog):
+        a = api.things["Device A"].thing_name
+        api.things["Device A"].status_code = JciHitachiAWSStatus(
+            {"DeviceType": 1, "Switch": 0}
+        )
+        mock = MagicMock()
+        mock.execute.return_value = [None, None, None, [a]]
+        mock.mqtt_events.mqtt_error_event.is_set.return_value = False
+        mock.mqtt_events.device_control = {}
+        mock.mqtt_events.device_undecodable = {
+            a: {"control": (f"{IDENTITY}/{a}/control/response", BINARY_FRAME)}
         }
-        assert thing.notifications == {
-            "CleanNotification": True,
-            "AntiMoldNotification": False,
-        }
+        api._mqtt = mock
+        with caplog.at_level(logging.WARNING):
+            assert api.set_status("Switch", "Device A", status_str_value="on") is False
+        assert "fcffff1f0101" in caplog.text
+
+
+class TestCognitoErrorClassification:
+    def test_only_credential_errors_are_auth_errors(self):
+        from JciHitachi.aws_connection import cognito_error
+
+        assert isinstance(
+            cognito_error(
+                "NotAuthorizedException Incorrect username or password.", "x"
+            ),
+            JciHitachiAuthError,
+        )
+        assert isinstance(
+            cognito_error("UserNotFoundException User does not exist.", "x"),
+            JciHitachiAuthError,
+        )
+        transient = cognito_error("TooManyRequestsException Rate exceeded", "x")
+        assert isinstance(transient, RuntimeError)
+        assert not isinstance(transient, JciHitachiAuthError)
+        assert not isinstance(
+            cognito_error("InternalErrorException", "x"), JciHitachiAuthError
+        )
 
 
 THINGS_JSON = {

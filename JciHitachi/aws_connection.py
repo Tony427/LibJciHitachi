@@ -38,6 +38,25 @@ class JciHitachiAuthError(RuntimeError):
     """The account could not be authenticated (AWS Cognito rejected the e-mail/password or token)."""
 
 
+# Cognito error types that mean "the credentials are wrong", as opposed to throttling or
+# a service error. https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_InitiateAuth.html#API_InitiateAuth_Errors
+COGNITO_CREDENTIAL_ERRORS = (
+    "NotAuthorizedException",
+    "UserNotFoundException",
+    "UserNotConfirmedException",
+    "PasswordResetRequiredException",
+)
+
+
+def cognito_error(status: str, message: str) -> RuntimeError:
+    """Build the exception for a non-OK Cognito status: JciHitachiAuthError for credential
+    problems, plain RuntimeError for anything transient (throttling, 5xx, network)."""
+
+    if status.startswith(COGNITO_CREDENTIAL_ERRORS):
+        return JciHitachiAuthError(f"{message}: {status}")
+    return RuntimeError(f"{message}: {status}")
+
+
 class JciHitachiDeviceError(RuntimeError):
     """Every requested device failed to answer; per-device failures are recorded on `AWSThing` instead."""
 
@@ -159,8 +178,9 @@ class JciHitachiAWSCognitoConnection(JciHitachiAWSHttpConnection):
         else:
             conn_status, self._aws_tokens = self.login()
             if conn_status != "OK":
-                raise JciHitachiAuthError(
-                    f"An error occurred when signing into AWS Cognito Service: {conn_status}"
+                raise cognito_error(
+                    conn_status,
+                    "An error occurred when signing into AWS Cognito Service",
                 )
 
     def _generate_headers(self, target: str) -> dict[str, str]:
@@ -616,9 +636,9 @@ class JciHitachiAWSMqttConnection:
             decoded = json.loads(payload.decode(errors="replace"))
         except Exception as e:
             self._mqtt_events.mqtt_error = e.__class__.__name__
-            # attributable to a device -> WARNING (refresh_status reports it per device);
-            # otherwise ERROR as before
-            (_LOGGER.warning if thing_name is not None else _LOGGER.error)(
+            # attributable to a device -> DEBUG (refresh_status reports it once per device,
+            # with the hex, when the device's state changes); otherwise ERROR as before
+            (_LOGGER.debug if thing_name is not None else _LOGGER.error)(
                 f"Mqtt topic {topic} published with payload {payload!r} "
                 f"(hex {bytes(payload).hex()}) cannot be decoded: {e}"
             )
@@ -925,6 +945,8 @@ class JciHitachiAWSMqttConnection:
                 self._mqtt_events.device_support_event[thing_name].clear()
             else:
                 self._mqtt_events.device_support_event[thing_name] = threading.Event()
+            # a new request must not be satisfied by the previous answer
+            self._mqtt_events.device_support.pop(thing_name, None)
 
             def fn():
                 publish_future, _ = self._mqttc.publish(
@@ -942,6 +964,7 @@ class JciHitachiAWSMqttConnection:
                 self._mqtt_events.device_status_event[thing_name].clear()
             else:
                 self._mqtt_events.device_status_event[thing_name] = threading.Event()
+            self._mqtt_events.device_status.pop(thing_name, None)
 
             def fn():
                 publish_future, _ = self._mqttc.publish(
@@ -959,6 +982,7 @@ class JciHitachiAWSMqttConnection:
                 self._mqtt_events.device_control_event[thing_name].clear()
             else:
                 self._mqtt_events.device_control_event[thing_name] = threading.Event()
+            self._mqtt_events.device_control.pop(thing_name, None)
 
             def fn():
                 publish_future, _ = self._mqttc.publish(
@@ -1008,6 +1032,7 @@ class JciHitachiAWSMqttConnection:
             self._mqtt_events.device_shadow_event[thing_name].clear()
         else:
             self._mqtt_events.device_shadow_event[thing_name] = threading.Event()
+        self._mqtt_events.device_shadow.pop(thing_name, None)
 
         def fn():
             if shadow_name is None:
