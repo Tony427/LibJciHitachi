@@ -681,16 +681,16 @@ class JciHitachiAWSMqttConnection:
     def _pop_shadow_token(self, client_token: str) -> Optional[str]:
         """Match a shadow answer to a request of this client; None when it is not ours.
 
-        All clients logged into the same account receive every shadow answer, and the client
-        token is the device's gateway id, so an answer to a request made by another client
-        (the official app, another Home Assistant, a diagnostic script) carries a valid token
-        that is simply not pending here. Observed on 2026-09-16 16:57 and 2026-09-17 02:34:
-        a second client read three shadows and the first client logged one
-        "unknown shadow response" per device at the same second, with no other effect.
+        Every client subscribed to a thing's shadow topics receives every answer published there
+        (AWS IoT publishes the answer to the `/get/accepted` topic, not to the requester), and this
+        library uses the gateway id as client token, which AWS describes as "a string unique to the
+        device". So an answer to another client's request (the official app, a second Home
+        Assistant, a script) arrives here with a valid token that is not pending.
 
-        Inference, not observed: if both clients ask for the same device's shadow at the same
-        moment, whichever answer arrives first is taken as this client's (same content) and
-        the second one ends up here.
+        Verified with a controlled two-client experiment on 2026-09-17: a token only client B could
+        produce was received once by client A and once by a third client (Home Assistant); when A and
+        B asked for the same device at the same moment, each received two answers, matched the first
+        and found the second not pending. Both got the data; nothing was lost.
         """
         thing_name = self._client_tokens.pop(client_token, None)
         if thing_name is not None:
