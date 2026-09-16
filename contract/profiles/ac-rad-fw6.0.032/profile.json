@@ -1,0 +1,58 @@
+{
+  "profile": "ac-rad-fw6.0.032",
+  "device_family": "Hitachi RAD-series ceiling-embedded air conditioners (Taiwan cloud 雲端智慧控); exact models withheld",
+  "units": 3,
+  "DeviceType": "1",
+  "FirmwareId": "3",
+  "FirmwareVersion": "6.0.032",
+  "LatestFirmwareVersion": "8.0.006:6",
+  "captured": "2026-09-16 / 2026-09-17",
+  "captured_with": "LibJciHitachi 1.7.2 + fork fix/tolerate-undecodable-device-responses; awsiotsdk 1.31.0; official app 雲端智慧控 11.30.600 (iOS) used only to read prompts",
+  "fixtures": "tests/fixtures/observed_2026_09_16/",
+  "messages": {
+    "GetAllDevice": "get_all_device_thing.schema.json",
+    "registration/response": "registration_response.schema.json",
+    "status/response": "status_response.schema.json",
+    "status-secondary/response": "status_response.schema.json (same key set; topic is requested by the official app, not by the library)",
+    "shadow info": "shadow_info.schema.json",
+    "control/response": "NOT CAPTURED in this profile",
+    "statistic/response": "NOT CAPTURED as JSON (only the 6-byte frame was seen on this topic, from a running unit)"
+  },
+  "non_json_answers": {
+    "bytes_hex": "fcffff1f0101",
+    "seen_on": [
+      "registration/response",
+      "status/response",
+      "status-secondary/response",
+      "statistic/response"
+    ],
+    "observed": [
+      "always exactly these 6 bytes, from three different units, 2026-09-03 .. 2026-09-17",
+      "per device: in the same poll other units on the account answer JSON",
+      "correlates with the unit running: a unit switched on from Home Assistant answered the frame on the next poll; a unit switched off went back to JSON within 6 minutes; in the 00:02 capture the only unit with status Switch 1 was the only one answering the frame; at 16:57 all three answered the frame (power state not recorded)",
+      "not correlated with the official app's freeze-clean prompt (shown for units that answered JSON)",
+      "shadow info still answers JSON for the same unit; status/response was JSON for the running unit in the same poll where its registration/response was the frame"
+    ],
+    "meaning": "unknown"
+  },
+  "nested_mqtt_publish_answer": {
+    "fixture": "registration_response_gw-B_nested_mqtt_publish.bin",
+    "seen": "once, 2026-09-17 00:36:12, on registration/response from an idle unit (Switch 0) that had answered the frame-free JSON on the previous polls",
+    "observed": [
+      "761 bytes: exactly the length of that unit's normal registration/response JSON (registration_response_gw-B.json is 761 bytes)",
+      "bytes 0..706 are a complete MQTT PUBLISH packet: type 0x32 (PUBLISH, QoS 1), remaining length 704, topic <identity>/<identity>_<gw>/status/response (134 bytes), packet id 4709, then a 620-byte status/response JSON (26 keys, Switch 0, CleanNotification 1)",
+      "bytes 707..760 are the first 54 bytes of a second MQTT PUBLISH (0x32, remaining length 714, topic length 144) cut off mid-topic",
+      "one poll earlier (00:35:22) the same unit's status/response event fired without JSON data; two polls later (00:38:29) it answered normally again"
+    ],
+    "meaning": "unknown; the content is a raw MQTT byte stream delivered as a payload. Placeholders in the fixture keep the original lengths so the framing stays valid."
+  },
+  "not_observed_in_this_profile": {
+    "STATUS_DICT[AC] fields absent from every payload": [
+      "HorizontalWindDirectionSetting",
+      "Panel",
+      "VerticalWindDirectionSetting",
+      "VerticalWindDirectionSwitch"
+    ],
+    "note": "max_temp / min_temp are derived by the library from TemperatureSetting in registration/response, not cloud fields"
+  }
+}
