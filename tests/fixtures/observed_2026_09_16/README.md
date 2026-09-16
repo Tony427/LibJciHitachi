@@ -34,11 +34,11 @@ Over one day, on the same account, with the HA integration polling every 30 s:
 
 | time (local) | event | registration/response |
 |---|---|---|
-| 16:57 | all three units running (afternoon) | frame from all three |
-| 22:34 | A running, B and C off | frame from A only; B and C answer JSON |
+| 16:57 | power state of the units not recorded | frame from all three |
+| 22:34 | A running (reported by its user), B and C off | frame from A only; B and C answer JSON |
 | 23:52 | C switched on from Home Assistant | C starts answering the frame on every poll |
 | 23:52–23:58 | A switched off by its user | A stops answering the frame; JSON from 23:58 |
-| 00:02 (capture above) | C running, A and B off | frame from C only |
+| 00:02 (capture above) | C running, A and B off (`Switch` in the status documents) | frame from C only |
 
 The official app showed the freeze-clean prompt for B all evening and for A at 23:58; both answered
 JSON at that time, so the prompt is not what triggers the frame. The `status/response` field
