@@ -38,7 +38,8 @@ The library subscribes once to `<identity>/+/+/response` (code). Requests are pu
 | (official app only) `.../statistic/request` | not seen | `.../statistic/response` | not captured as JSON |
 
 Because the subscription is a wildcard on the account, **every client of the account receives every
-answer**, including answers to requests made by the official app or by another Home Assistant instance.
+answer**, including answers to requests made by the official app or by another Home Assistant instance
+(controlled experiment in §3.3, phases 0 and 2).
 Observed: a Home Assistant host whose login had failed kept receiving the app's bursts (three devices ×
 `statistic`, `registration`, `status` within 30 ms) for hours.
 
@@ -64,15 +65,28 @@ per thing (this is what the per-device-availability branch does).
 document's `state.reported` is `shadow_info.schema.json`. The shadow answered JSON for a unit whose
 `registration/response` was the 6-byte frame in the same poll.
 
-**Every client of the account receives every shadow answer.** The client token is the gateway id,
-so an answer to a request made by another client (the official app, a second Home Assistant, a diagnostic
-script) arrives with a valid token that is not pending in this client. Observed twice: on 2026-09-16 16:57
-and 2026-09-17 02:34 a second client read the three shadows and the first client logged
-`An unknown shadow response is received. Client token: <gw>` once per device, in the same second, with no
-other effect (no MQTT interruption, polling unaffected). The library now logs such answers at DEBUG when
-the token belongs to a device it knows, and keeps ERROR for tokens of no known device. Not observed but
-follows from the token scheme: if two clients ask for the same device's shadow at the same moment, the
-first answer to arrive is taken by whichever client pops the token first (the content is the same).
+**Every client of the account receives every shadow answer, and every request/response answer.**
+AWS IoT answers a shadow `get` by publishing to the `/get/accepted` topic, not to the requester, and describes
+the client token as "a string unique to the device that enables you to associate responses with requests"
+([Device Shadow MQTT topics](https://docs.aws.amazon.com/iot/latest/developerguide/device-shadow-mqtt.html),
+[Device Shadow documents](https://docs.aws.amazon.com/iot/latest/developerguide/device-shadow-document.html#client-token)).
+This library uses the gateway id as token, so another client's answer arrives with a valid token that is not
+pending here.
+
+Controlled experiment, 2026-09-17 02:45, two script clients A and B plus Home Assistant as a third client,
+same account, no control commands:
+
+| phase | action | observed |
+|---|---|---|
+| 0 | A and B connected and subscribed, nobody on our side sends anything, 20 s | A received 3 `status/response` (Home Assistant's 30 s poll of the three units) |
+| 1 | B asks device X's shadow with a client token only B could produce | A received that token once, B once, Home Assistant once (logged as unknown token) |
+| 2 | B sends `status/request` for X with a unique `Timestamp` | A received the answer carrying that value in `RequestTimestamp` once, B once; nothing for the other devices |
+| 3 | A and B ask device Y's shadow at the same moment with the standard token | A received two answers: first matched, second not pending; B the same |
+
+Earlier uncontrolled sightings of the same effect: 2026-09-16 16:57 and 2026-09-17 02:34 (a probe on another
+client; Home Assistant logged one "unknown shadow response" per device in the same second). No MQTT
+interruption in any of these. The library logs answers carrying a known device's token at DEBUG and keeps
+ERROR for tokens of no known device.
 
 The cloud also publishes shadow **updates on its own**, with **no client token**, carrying only
 `{"online": false/true, "disconnectReason": "CLIENT_INITIATED_DISCONNECT" | ""}` when a client of the account
