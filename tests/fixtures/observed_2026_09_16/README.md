@@ -1,4 +1,4 @@
-# Observed payloads, 2026-09-16 / 17 (Taiwan cloud, three RAD-series air conditioners)
+# Observed payloads, 2026-09-16 / 17 (Taiwan cloud, three Hitachi RAD-series ceiling-embedded air conditioners of different capacities; exact models withheld)
 
 Captured with LibJciHitachi 1.7.2 + this branch, `JciHitachiAWSAPI(...).login()` with hooks on
 `_on_publish`, `_on_get_named_shadow_accepted` and `httpx.Client.send`. Nothing is hand-written;
