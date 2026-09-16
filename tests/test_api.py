@@ -291,6 +291,7 @@ class TestAWSAPI:
                 [],
             ]
             mock_mqtt.mqtt_events.mqtt_error_event.is_set.return_value = False
+            mock_mqtt.mqtt_events.device_undecodable = {}
 
             mock_mqtt.mqtt_events.device_status = {thing_name: ""}
             mock_mqtt.mqtt_events.device_support = {thing_name: ""}

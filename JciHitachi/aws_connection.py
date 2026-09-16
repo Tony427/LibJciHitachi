@@ -651,6 +651,13 @@ class JciHitachiAWSMqttConnection:
             self._set_device_event(thing_name, kind)
 
     def _on_update_named_shadow_accepted(self, response):
+        if response.client_token is None:
+            # The cloud updates the shadow itself (e.g. `online` / `disconnectReason` when the
+            # official app connects or disconnects). Not a reply to us; nothing to match.
+            _LOGGER.debug(
+                f"Ignoring a cloud-initiated shadow update: {getattr(response.state, 'reported', None)}"
+            )
+            return
         try:
             thing_name = self._client_tokens.pop(response.client_token)
         except:
@@ -673,6 +680,9 @@ class JciHitachiAWSMqttConnection:
         )
 
     def _on_get_named_shadow_accepted(self, response):
+        if response.client_token is None:
+            _LOGGER.debug("Ignoring a `get` shadow response without a client token.")
+            return
         try:
             thing_name = self._client_tokens.pop(response.client_token)
         except:

@@ -1,10 +1,12 @@
 from __future__ import annotations
+import logging
 import random
 import time
 import warnings
 from typing import Optional, Union
 
 from . import aws_connection, connection, mqtt_connection
+from .aws_connection import JciHitachiAuthError, JciHitachiDeviceError  # noqa: F401 (re-exported)
 from .model import (
     JciHitachiAC,
     JciHitachiACSupport,
@@ -20,6 +22,16 @@ from .status import (
     JciHitachiCommandAC,
     JciHitachiCommandDH,
     JciHitachiStatusInterpreter,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+# Shadow `info` keys that mean "the official app is showing a notification for this device".
+SHADOW_NOTIFICATION_KEYS = (
+    "CleanNotification",
+    "CleanFilterNotification",
+    "CleanSecondaryFilterNotification",
+    "AntiMoldNotification",
 )
 
 
@@ -635,6 +647,7 @@ class AWSThing:
     def __init__(self, thing_json: dict) -> None:
         self._json: dict = thing_json
         self._available: bool = True
+        self._attention_reason: Optional[str] = None
         self._shadow: Optional[dict] = None
         self._status_code: Optional[JciHitachiAWSStatus] = None
         self._support_code: Optional[JciHitachiAWSStatusSupport] = None
@@ -711,16 +724,53 @@ class AWSThing:
         self._available = x
 
     @property
-    def brand(self) -> str:
+    def attention_reason(self) -> Optional[str]:
+        """Why the device is unavailable, or None when the last refresh succeeded.
+
+        Set by `JciHitachiAWSAPI.refresh_status()` when this device (and only this device)
+        timed out or answered with a payload the library cannot decode.
+
+        Returns
+        -------
+        str or None
+            Human-readable reason.
+        """
+
+        return self._attention_reason
+
+    @attention_reason.setter
+    def attention_reason(self, x: Optional[str]) -> None:
+        self._attention_reason = x
+
+    @property
+    def notifications(self) -> dict[str, bool]:
+        """Notifications the official app shows for this device, read from the `info` shadow.
+
+        Returns
+        -------
+        dict of bool
+            Keys are `SHADOW_NOTIFICATION_KEYS` present in the shadow; empty when no shadow was read.
+        """
+
+        if not self._shadow:
+            return {}
+        return {
+            key: bool(self._shadow[key])
+            for key in SHADOW_NOTIFICATION_KEYS
+            if key in self._shadow
+        }
+
+    @property
+    def brand(self) -> Optional[str]:
         """Device brand.
 
         Returns
         -------
-        str
-            Device brand.
+        str or None
+            Device brand; None until the support code has been read.
         """
 
-        return getattr(self._support_code, "Brand")
+        return getattr(self._support_code, "Brand", None)
 
     @property
     def firmware_version(self) -> str:
@@ -732,7 +782,7 @@ class AWSThing:
             Device firmware version.
         """
 
-        return getattr(self._support_code, "FirmwareVersion")
+        return getattr(self._support_code, "FirmwareVersion", None)
 
     @property
     def firmware_code(self) -> str:
@@ -744,7 +794,7 @@ class AWSThing:
             Device firmware code.
         """
 
-        return getattr(self._support_code, "FirmwareCode")
+        return getattr(self._support_code, "FirmwareCode", None)
 
     @property
     def gateway_mac_address(self) -> str:
@@ -768,7 +818,7 @@ class AWSThing:
             Device model.
         """
 
-        return getattr(self._support_code, "Model")
+        return getattr(self._support_code, "Model", None)
 
     @property
     def name(self) -> str:
@@ -973,10 +1023,18 @@ class JciHitachiAWSAPI:
     def login(self) -> None:
         """Login API.
 
+        Login succeeds once the account is authenticated, the device list is retrieved and the
+        MQTT connection is up. Devices are then refreshed individually: a device that times out
+        or answers with an undecodable payload is marked `available = False` with an
+        `attention_reason`, and the other devices stay usable. Even when every device fails,
+        login returns normally (with a warning) so callers can keep polling until they recover.
+
         Raises
         ------
+        JciHitachiAuthError
+            If AWS Cognito rejects the credentials (subclass of RuntimeError).
         RuntimeError
-            If a login error occurs, RuntimeError will be raised.
+            If the device list cannot be retrieved or the MQTT connection fails.
         """
 
         conn = aws_connection.GetUser(
@@ -986,6 +1044,10 @@ class JciHitachiAWSAPI:
         )
         self._aws_tokens = conn.aws_tokens
         conn_status, self._aws_identity = conn.get_data()
+        if conn_status != "OK":
+            raise JciHitachiAuthError(
+                f"An error occurred when retrieving the user identity: {conn_status}"
+            )
 
         conn = aws_connection.GetAllDevice(
             self._aws_tokens, print_response=self.print_response
@@ -1027,7 +1089,16 @@ class JciHitachiAWSAPI:
                 )
 
             # status
-            self.refresh_status(refresh_support_code=True, refresh_shadow=True)
+            try:
+                self.refresh_status(refresh_support_code=True, refresh_shadow=True)
+            except JciHitachiDeviceError as e:
+                # Every device failed, but the account and the MQTT session are fine: keep the
+                # connection so the caller can keep polling; each thing carries its own reason.
+                _LOGGER.warning(f"Logged in, but no device is available yet: {e}")
+            except Exception:
+                # Do not leak a live MQTT session (and its subscriptions) behind a failed login.
+                self._mqtt.disconnect()
+                raise
         else:
             raise RuntimeError(
                 f"An error occurred when retrieving devices info: {conn_status}"
@@ -1152,10 +1223,15 @@ class JciHitachiAWSAPI:
         refresh_shadow : bool, optional
             Whether or not to refresh AWS IoT Shadow, by default False.
 
+        A device that times out or answers with an undecodable payload is marked
+        `available = False` and gets an `attention_reason`; the other devices are refreshed
+        normally. Only when every requested device failed is an exception raised.
+
         Raises
         ------
-        RuntimeError
-            If an error occurs, RuntimeError will be raised.
+        JciHitachiDeviceError
+            If every requested device failed (subclass of RuntimeError). The message lists
+            each device's reason.
         """
 
         # queue tasks
@@ -1182,47 +1258,80 @@ class JciHitachiAWSAPI:
         # execute
         support_results, shadow_results, status_results, _ = self._mqtt.execute()
 
-        # gather results
+        # gather results, one device at a time; a failure only affects that device
+        reasons: list[str] = []
+        requested = 0
         for name, thing in self._get_valid_things(device_name):
-            if refresh_support_code:
-                if thing.thing_name in support_results:
-                    if thing.thing_name not in self._mqtt.mqtt_events.device_support:
-                        raise RuntimeError(
-                            f"An event occurred but wasn't accompanied with data when refreshing {name} support code."
-                        )
-                    thing.support_code = self._mqtt.mqtt_events.device_support[
-                        thing.thing_name
-                    ]
-                else:
-                    raise RuntimeError(
-                        f"Timed out refreshing {name} support code. Please ensure the device is online and avoid opening the official app."
-                    )
-            if refresh_shadow:
-                if thing.thing_name in shadow_results:
-                    if thing.thing_name not in self._mqtt.mqtt_events.device_shadow:
-                        raise RuntimeError(
-                            f"An event occurred but wasn't accompanied with data when refreshing {name} shadow."
-                        )
-                    thing.shadow = self._mqtt.mqtt_events.device_shadow[
-                        thing.thing_name
-                    ]
-                else:
-                    raise RuntimeError(
-                        f"Timed out refreshing {name} shadow. Please ensure the device is online and avoid opening the official app."
-                    )
-
-            if thing.thing_name in status_results:
-                if thing.thing_name not in self._mqtt.mqtt_events.device_status:
-                    raise RuntimeError(
-                        f"An event occurred but wasn't accompanied with data when refreshing {name} status code."
-                    )
-                thing.status_code = self._mqtt.mqtt_events.device_status[
-                    thing.thing_name
-                ]
-            else:
-                raise RuntimeError(
-                    f"Timed out refreshing {name} status code. Please ensure the device is online and avoid opening the official app."
+            requested += 1
+            reason = None
+            if refresh_support_code and reason is None:
+                reason = self._gather_one(
+                    name,
+                    thing,
+                    "support code",
+                    support_results,
+                    self._mqtt.mqtt_events.device_support,
+                    lambda v: setattr(thing, "support_code", v),
                 )
+            if refresh_shadow and reason is None:
+                reason = self._gather_one(
+                    name,
+                    thing,
+                    "shadow",
+                    shadow_results,
+                    self._mqtt.mqtt_events.device_shadow,
+                    lambda v: setattr(thing, "shadow", v),
+                )
+            if reason is None:
+                reason = self._gather_one(
+                    name,
+                    thing,
+                    "status code",
+                    status_results,
+                    self._mqtt.mqtt_events.device_status,
+                    lambda v: setattr(thing, "status_code", v),
+                )
+
+            if reason is None:
+                thing.available = True
+                thing.attention_reason = None
+            else:
+                thing.available = False
+                thing.attention_reason = reason
+                reasons.append(reason)
+                _LOGGER.warning(f"{name} is unavailable: {reason}")
+
+        if requested and len(reasons) == requested:
+            raise JciHitachiDeviceError(" | ".join(reasons))
+
+    def _gather_one(
+        self,
+        name: str,
+        thing: AWSThing,
+        what: str,
+        results: Optional[list],
+        data: dict,
+        store,
+    ) -> Optional[str]:
+        """Store one device's `what` result; return a reason string on failure, None on success."""
+
+        if results is not None and thing.thing_name in results:
+            if thing.thing_name in data:
+                store(data[thing.thing_name])
+                return None
+            undecodable = self._mqtt.mqtt_events.device_undecodable.get(
+                thing.thing_name
+            )
+            if undecodable is not None:
+                topic, payload = undecodable
+                return (
+                    f"{name} answered the {what} request on {topic.rsplit('/', 2)[-2]} with an "
+                    f"undecodable payload (hex {payload.hex()}, not JSON). The device may need "
+                    f"attention in the official app (pending freeze-clean / filter notification) "
+                    f"or run a firmware whose protocol this library does not understand yet."
+                )
+            return f"An event occurred but wasn't accompanied with data when refreshing {name} {what}."
+        return f"Timed out refreshing {name} {what}. Please ensure the device is online and avoid opening the official app."
 
     def get_status(
         self, device_name: Optional[str] = None, legacy: bool = False
@@ -1246,12 +1355,17 @@ class JciHitachiAWSAPI:
 
         statuses = {}
         for name, thing in self._get_valid_things(device_name):
+            if thing.status_code is None:
+                # never refreshed successfully (see thing.attention_reason); nothing to report
+                continue
             if legacy:
                 statuses[name] = thing.status_code.legacy_status
             else:
                 statuses[name] = thing.status_code
 
-            # inject temp and humidity limitations from the support code
+            # inject temp and humidity limitations from the support code, if it was read
+            if thing.support_code is None:
+                continue
             if thing.type == "AC":
                 statuses[name]._status["max_temp"] = thing.support_code.max_temp
                 statuses[name]._status["min_temp"] = thing.support_code.min_temp
