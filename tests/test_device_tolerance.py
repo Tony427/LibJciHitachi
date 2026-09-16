@@ -138,6 +138,45 @@ class TestShadowWithoutClientToken:
         assert mqtt._mqtt_events.device_control == {}
 
 
+class TestShadowAnswerFromAnotherClient:
+    """Observed 2026-09-16 16:57 and 2026-09-17 02:34: another client of the same account read
+    three shadows and this client received the answers with valid gateway tokens."""
+
+    def _response(self, token):
+        response = MagicMock()
+        response.client_token = token
+        response.state.reported = {"online": True}
+        return response
+
+    def test_known_device_token_not_pending_is_debug(self, mqtt, caplog):
+        thing = f"{IDENTITY}_{GW_A}"
+        mqtt._mqtt_events.device_shadow_event[thing] = (
+            threading.Event()
+        )  # we asked before
+        with caplog.at_level(logging.DEBUG):
+            mqtt._on_get_named_shadow_accepted(self._response(GW_A))
+            mqtt._on_update_named_shadow_accepted(self._response(GW_A))
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert "another client of the same account" in caplog.text
+        assert thing not in mqtt._mqtt_events.device_shadow
+        assert not mqtt._mqtt_events.device_shadow_event[thing].is_set()
+
+    def test_token_of_no_known_device_is_error(self, mqtt, caplog):
+        with caplog.at_level(logging.DEBUG):
+            mqtt._on_get_named_shadow_accepted(
+                self._response("not-a-gateway-id")
+            )
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    def test_pending_token_is_still_matched(self, mqtt):
+        thing = f"{IDENTITY}_{GW_A}"
+        mqtt._client_tokens = {GW_A: thing}
+        mqtt._mqtt_events.device_shadow_event[thing] = threading.Event()
+        mqtt._on_get_named_shadow_accepted(self._response(GW_A))
+        assert mqtt._mqtt_events.device_shadow[thing] == {"online": True}
+        assert mqtt._mqtt_events.device_shadow_event[thing].is_set()
+
+
 class TestRefreshStatusPerDevice:
     def _mock_mqtt(self, api, execute_result):
         mock = MagicMock()
