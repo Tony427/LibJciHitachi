@@ -40,6 +40,8 @@ Over one day, on the same account, with the HA integration polling every 30 s:
 | 23:52 | C switched on from Home Assistant | C starts answering the frame on every poll |
 | 23:52–23:58 | A switched off by its user | A stops answering the frame; JSON from 23:58 |
 | 00:02 (capture above) | C running, A and B off (`Switch` in the status documents) | frame from C only |
+| 00:35–00:38 | B idle | B's `status/response` event fired without JSON once, then B's `registration/response` was the 761-byte raw MQTT stream (fixture below), then JSON again |
+| 01:13 | C **still running** (status `Mode` cool, `Switch` 1; Home Assistant showed 25 °C cooling) | C answered JSON again after answering the frame since 23:52. So "running" is not sufficient for the frame; what changed on the unit is not known. |
 
 The official app showed the freeze-clean prompt for B all evening and for A at 23:58; both answered
 JSON at that time, so the prompt is not what triggers the frame. The `status/response` field
