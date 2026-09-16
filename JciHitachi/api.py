@@ -1263,34 +1263,45 @@ class JciHitachiAWSAPI:
         requested = 0
         for name, thing in self._get_valid_things(device_name):
             requested += 1
-            reason = None
-            if refresh_support_code and reason is None:
-                reason = self._gather_one(
-                    name,
-                    thing,
-                    "support code",
-                    support_results,
-                    self._mqtt.mqtt_events.device_support,
-                    lambda v: setattr(thing, "support_code", v),
+            # every channel is stored if it arrived (the shadow often works while the
+            # status/support channel does not); the first failure becomes the reason
+            failures: list[str] = []
+            if refresh_support_code:
+                failures.append(
+                    self._gather_one(
+                        name,
+                        thing,
+                        "support code",
+                        "registration",
+                        support_results,
+                        self._mqtt.mqtt_events.device_support,
+                        lambda v: setattr(thing, "support_code", v),
+                    )
                 )
-            if refresh_shadow and reason is None:
-                reason = self._gather_one(
-                    name,
-                    thing,
-                    "shadow",
-                    shadow_results,
-                    self._mqtt.mqtt_events.device_shadow,
-                    lambda v: setattr(thing, "shadow", v),
+            if refresh_shadow:
+                failures.append(
+                    self._gather_one(
+                        name,
+                        thing,
+                        "shadow",
+                        None,
+                        shadow_results,
+                        self._mqtt.mqtt_events.device_shadow,
+                        lambda v: setattr(thing, "shadow", v),
+                    )
                 )
-            if reason is None:
-                reason = self._gather_one(
+            failures.append(
+                self._gather_one(
                     name,
                     thing,
                     "status code",
+                    "status",
                     status_results,
                     self._mqtt.mqtt_events.device_status,
                     lambda v: setattr(thing, "status_code", v),
                 )
+            )
+            reason = next((f for f in failures if f is not None), None)
 
             if reason is None:
                 thing.available = True
@@ -1309,23 +1320,32 @@ class JciHitachiAWSAPI:
         name: str,
         thing: AWSThing,
         what: str,
+        kind: Optional[str],
         results: Optional[list],
         data: dict,
         store,
     ) -> Optional[str]:
-        """Store one device's `what` result; return a reason string on failure, None on success."""
+        """Store one device's `what` result; return a reason string on failure, None on success.
+
+        `kind` is the MQTT topic kind (`registration`, `status`) used to look up an undecodable
+        answer recorded by the connection; None for the shadow, which has no such record.
+        """
 
         if results is not None and thing.thing_name in results:
             if thing.thing_name in data:
                 store(data[thing.thing_name])
                 return None
-            undecodable = self._mqtt.mqtt_events.device_undecodable.get(
-                thing.thing_name
+            undecodable = (
+                self._mqtt.mqtt_events.device_undecodable.get(thing.thing_name, {}).get(
+                    kind
+                )
+                if kind is not None
+                else None
             )
             if undecodable is not None:
                 topic, payload = undecodable
                 return (
-                    f"{name} answered the {what} request on {topic.rsplit('/', 2)[-2]} with an "
+                    f"{name} answered the {what} request on {kind}/response with an "
                     f"undecodable payload (hex {payload.hex()}, not JSON). The device may need "
                     f"attention in the official app (pending freeze-clean / filter notification) "
                     f"or run a firmware whose protocol this library does not understand yet."

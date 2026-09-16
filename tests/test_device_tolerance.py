@@ -60,7 +60,9 @@ class TestOnPublishUndecodable:
         with caplog.at_level(logging.ERROR):
             mqtt._on_publish(topic, BINARY_FRAME, None, None, None)
 
-        assert mqtt._mqtt_events.device_undecodable[thing] == (topic, BINARY_FRAME)
+        assert mqtt._mqtt_events.device_undecodable[thing] == {
+            "registration": (topic, BINARY_FRAME)
+        }
         assert mqtt._mqtt_events.device_support_event[thing].is_set(), (
             "waiter must not burn the timeout"
         )
@@ -83,7 +85,10 @@ class TestOnPublishUndecodable:
             None,
             None,
         )
-        assert thing in mqtt._mqtt_events.device_undecodable
+        assert set(mqtt._mqtt_events.device_undecodable[thing]) == {
+            "statistic",
+            "status-secondary",
+        }
 
     def test_undecodable_without_thing_keeps_global_error(self, mqtt):
         mqtt._mqtt_events.mqtt_error_event.clear()
@@ -115,7 +120,7 @@ class TestOnPublishUndecodable:
             None,
             None,
         )
-        assert thing not in mqtt._mqtt_events.device_undecodable
+        assert "status" not in mqtt._mqtt_events.device_undecodable.get(thing, {})
 
 
 class TestShadowWithoutClientToken:
@@ -160,7 +165,7 @@ class TestRefreshStatusPerDevice:
         }
         mock.mqtt_events.device_status = {b: status}
         mock.mqtt_events.device_undecodable = {
-            a: (f"{IDENTITY}/{a}/registration/response", BINARY_FRAME)
+            a: {"registration": (f"{IDENTITY}/{a}/registration/response", BINARY_FRAME)}
         }
 
         api.refresh_status(refresh_support_code=True, refresh_shadow=True)  # no raise
@@ -170,6 +175,9 @@ class TestRefreshStatusPerDevice:
         assert "undecodable payload (hex fcffff1f0101" in thing_a.attention_reason
         assert "registration" in thing_a.attention_reason
         assert thing_a.support_code is None and thing_a.status_code is None
+        # the shadow channel did answer, so it is kept even though the device failed
+        assert thing_a.shadow == {"CleanNotification": True}
+        assert thing_a.notifications == {"CleanNotification": True}
         assert thing_b.available is True and thing_b.attention_reason is None
         assert thing_b.support_code is support and thing_b.status_code is status
 

@@ -64,8 +64,11 @@ class JciHitachiMqttEvents:
     device_support: dict[str, JciHitachiAWSStatusSupport] = field(default_factory=dict)
     device_control: dict[str, dict] = field(default_factory=dict)
     device_shadow: dict[str, dict] = field(default_factory=dict)
-    # thing_name -> (topic, raw payload) of the latest response that was not JSON
-    device_undecodable: dict[str, tuple[str, bytes]] = field(default_factory=dict)
+    # thing_name -> topic kind (`registration`, `status`, ...) -> (topic, raw payload) of the
+    # latest response on that kind that was not JSON
+    device_undecodable: dict[str, dict[str, tuple[str, bytes]]] = field(
+        default_factory=dict
+    )
     mqtt_error: str = field(default_factory=str)
     device_status_event: dict[str, threading.Event] = field(default_factory=dict)
     device_support_event: dict[str, threading.Event] = field(default_factory=dict)
@@ -613,7 +616,9 @@ class JciHitachiAWSMqttConnection:
             decoded = json.loads(payload.decode(errors="replace"))
         except Exception as e:
             self._mqtt_events.mqtt_error = e.__class__.__name__
-            _LOGGER.error(
+            # attributable to a device -> WARNING (refresh_status reports it per device);
+            # otherwise ERROR as before
+            (_LOGGER.warning if thing_name is not None else _LOGGER.error)(
                 f"Mqtt topic {topic} published with payload {payload!r} "
                 f"(hex {bytes(payload).hex()}) cannot be decoded: {e}"
             )
@@ -624,7 +629,10 @@ class JciHitachiAWSMqttConnection:
             # Attributable to one device: remember the raw frame for diagnostics and release the
             # waiter right away instead of letting it burn the whole timeout. refresh_status()
             # turns this into a per-device `attention_reason`; the other devices are unaffected.
-            self._mqtt_events.device_undecodable[thing_name] = (topic, bytes(payload))
+            self._mqtt_events.device_undecodable.setdefault(thing_name, {})[kind] = (
+                topic,
+                bytes(payload),
+            )
             if kind in _AWAITED_TOPIC_KINDS and split_topic[3] == "response":
                 self._set_device_event(thing_name, kind)
             return
@@ -646,8 +654,8 @@ class JciHitachiAWSMqttConnection:
                 self._mqtt_events.device_control[thing_name] = payload
             else:
                 return
-            # A well-formed answer supersedes an earlier undecodable one from the same device.
-            self._mqtt_events.device_undecodable.pop(thing_name, None)
+            # A well-formed answer supersedes an earlier undecodable one on the same kind.
+            self._mqtt_events.device_undecodable.get(thing_name, {}).pop(kind, None)
             self._set_device_event(thing_name, kind)
 
     def _on_update_named_shadow_accepted(self, response):
