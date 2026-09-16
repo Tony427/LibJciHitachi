@@ -30,6 +30,7 @@
       "always exactly these 6 bytes, from three different units, 2026-09-03 .. 2026-09-17",
       "per device: in the same poll other units on the account answer JSON",
       "correlates with the unit running: a unit switched on from Home Assistant answered the frame on the next poll; a unit switched off went back to JSON within 6 minutes; in the 00:02 capture the only unit with status Switch 1 was the only one answering the frame; at 16:57 all three answered the frame (power state not recorded)",
+      "BUT running is not sufficient: at 01:13 on 2026-09-17 the unit that had answered the frame since 23:52 answered JSON again while its status said Mode cool, Switch 1 (Home Assistant showed it cooling at 25 °C); what changed on the unit at that moment is not known",
       "not correlated with the official app's freeze-clean prompt (shown for units that answered JSON)",
       "shadow info still answers JSON for the same unit; status/response was JSON for the running unit in the same poll where its registration/response was the frame"
     ],
