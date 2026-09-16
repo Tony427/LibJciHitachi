@@ -57,7 +57,7 @@ class TestOnPublishUndecodable:
         mqtt._mqtt_events.device_support_event[thing] = threading.Event()
         mqtt._mqtt_events.mqtt_error_event.clear()
 
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.WARNING):
             mqtt._on_publish(topic, BINARY_FRAME, None, None, None)
 
         assert mqtt._mqtt_events.device_undecodable[thing] == {
