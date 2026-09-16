@@ -64,6 +64,16 @@ per thing (this is what the per-device-availability branch does).
 document's `state.reported` is `shadow_info.schema.json`. The shadow answered JSON for a unit whose
 `registration/response` was the 6-byte frame in the same poll.
 
+**Every client of the account receives every shadow answer.** The client token is the gateway id,
+so an answer to a request made by another client (the official app, a second Home Assistant, a diagnostic
+script) arrives with a valid token that is not pending in this client. Observed twice: on 2026-09-16 16:57
+and 2026-09-17 02:34 a second client read the three shadows and the first client logged
+`An unknown shadow response is received. Client token: <gw>` once per device, in the same second, with no
+other effect (no MQTT interruption, polling unaffected). The library now logs such answers at DEBUG when
+the token belongs to a device it knows, and keeps ERROR for tokens of no known device. Not observed but
+follows from the token scheme: if two clients ask for the same device's shadow at the same moment, the
+first answer to arrive is taken by whichever client pops the token first (the content is the same).
+
 The cloud also publishes shadow **updates on its own**, with **no client token**, carrying only
 `{"online": false/true, "disconnectReason": "CLIENT_INITIATED_DISCONNECT" | ""}` when a client of the account
 connects or disconnects. These are not replies to any request (observed every time a client disconnected).

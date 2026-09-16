@@ -678,6 +678,37 @@ class JciHitachiAWSMqttConnection:
             self._mqtt_events.device_undecodable.get(thing_name, {}).pop(kind, None)
             self._set_device_event(thing_name, kind)
 
+    def _pop_shadow_token(self, client_token: str) -> Optional[str]:
+        """Match a shadow answer to a request of this client; None when it is not ours.
+
+        All clients logged into the same account receive every shadow answer, and the client
+        token is the device's gateway id, so an answer to a request made by another client
+        (the official app, another Home Assistant, a diagnostic script) carries a valid token
+        that is simply not pending here. Observed on 2026-09-16 16:57 and 2026-09-17 02:34:
+        a second client read three shadows and the first client logged one
+        "unknown shadow response" per device at the same second, with no other effect.
+
+        Inference, not observed: if both clients ask for the same device's shadow at the same
+        moment, whichever answer arrives first is taken as this client's (same content) and
+        the second one ends up here.
+        """
+        thing_name = self._client_tokens.pop(client_token, None)
+        if thing_name is not None:
+            return thing_name
+        if any(
+            name.endswith(f"_{client_token}")
+            for name in self._mqtt_events.device_shadow_event
+        ):
+            _LOGGER.debug(
+                f"Shadow answer for a known device (client token {client_token}) that this "
+                "client did not request; another client of the same account may have requested it."
+            )
+        else:
+            _LOGGER.error(
+                f"An unknown shadow response is received. Client token: {client_token}"
+            )
+        return None
+
     def _on_update_named_shadow_accepted(self, response):
         if response.client_token is None:
             # The cloud updates the shadow itself (e.g. `online` / `disconnectReason` when the
@@ -686,12 +717,8 @@ class JciHitachiAWSMqttConnection:
                 f"Ignoring a cloud-initiated shadow update: {getattr(response.state, 'reported', None)}"
             )
             return
-        try:
-            thing_name = self._client_tokens.pop(response.client_token)
-        except:
-            _LOGGER.error(
-                f"An unknown shadow response is received. Client token: {response.client_token}"
-            )
+        thing_name = self._pop_shadow_token(response.client_token)
+        if thing_name is None:
             return
 
         if self._print_response:
@@ -711,12 +738,8 @@ class JciHitachiAWSMqttConnection:
         if response.client_token is None:
             _LOGGER.debug("Ignoring a `get` shadow response without a client token.")
             return
-        try:
-            thing_name = self._client_tokens.pop(response.client_token)
-        except:
-            _LOGGER.error(
-                f"An unknown shadow response is received. Client token: {response.client_token}"
-            )
+        thing_name = self._pop_shadow_token(response.client_token)
+        if thing_name is None:
             return
 
         if self._print_response:
