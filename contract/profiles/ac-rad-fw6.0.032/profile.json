@@ -15,7 +15,7 @@
     "status/response": "status_response.schema.json",
     "status-secondary/response": "status_response.schema.json (same key set; topic is requested by the official app, not by the library)",
     "shadow info": "shadow_info.schema.json",
-    "control/response": "NOT CAPTURED in this profile",
+    "control/response": "control_response.schema.json (CleanSwitch commands only)",
     "statistic/response": "NOT CAPTURED as JSON (only the 6-byte frame was seen on this topic, from a running unit)"
   },
   "non_json_answers": {
@@ -55,5 +55,31 @@
       "VerticalWindDirectionSwitch"
     ],
     "note": "max_temp / min_temp are derived by the library from TemperatureSetting in registration/response, not cloud fields"
+  },
+  "fixtures_freeze_clean": "tests/fixtures/observed_2026_09_17_freeze_clean/",
+  "freeze_clean": {
+    "captured": "2026-09-17 10:16 .. 12:40, two of the three units (Device A, Device B), commands from this library's set_status",
+    "observed": [
+      "control/response echoed CleanSwitch and Error 0 for all 7 starts; 3 cleaned and 4 did not, so the echo does not tell whether the unit started",
+      "accepted start: status CleanSwitch 1, CleanStatus 1 within about 1 s; CleanStatus 2 at most 28 s later; CleanSwitch 0, CleanStatus 0 at the end",
+      "completed cleans took about 62 min (Device A) and 54 min (Device B) from the command; one sample each",
+      "CleanNotification 1 -> 0 during the clean, 33 min (Device A) and 25 min (Device B) after the command",
+      "Switch stayed 0 throughout",
+      "a start of Device A while Device B was cleaning was not carried out; the official app pushed '<device>凍結洗淨未執行，請確認是否要重新設定' within 30 s",
+      "three starts of Device B 2, 7 and 17 min after interrupting its own clean were not carried out, with no other unit cleaning; cause unknown; a start 84 min after the interrupt was accepted",
+      "Device B started 1 min after Device A completed a clean"
+    ],
+    "owner_manual": {
+      "source": "https://www.hitachiaircon.com/tw/storage/files/downloads/download_file_851146c22c930e869e10be4b544ac2cc.pdf (pp. 13-14), the owner's manual of these indoor units",
+      "clauses": [
+        "a freeze clean takes at most about 86 min and starts with about 30 s of environment detection",
+        "the reminder appears after about 100 h of operation",
+        "runs only with outdoor 2-46 degC, indoor 10-32 degC, relative humidity 30-85 %",
+        "not carried out within 60 min after the previous freeze clean completed",
+        "one-to-many (multi-split) systems: only one indoor unit can freeze clean at a time",
+        "an air-conditioning request stops the freeze clean; it does not resume after a power failure"
+      ],
+      "scope": "Written for this unit family. Other device types, firmware or single-split systems may behave differently. These are manual statements, not cloud behaviour, and the library does not enforce any of them."
+    }
   }
 }

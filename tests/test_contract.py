@@ -177,3 +177,44 @@ class TestProfile:
             assert inner["DeviceType"] == 1 and inner["Switch"] == 0
             tail = raw[3 + remaining :]
             assert len(tail) == 54 and tail[0] == 0x32
+
+    def test_recorded_freeze_clean_timeline(self, profile_dir):
+        """An echoed CleanSwitch with Error 0 is not proof that the unit started (2026-09-17)."""
+        profile = json.loads((profile_dir / "profile.json").read_text(encoding="utf-8"))
+        if "fixtures_freeze_clean" not in profile:
+            pytest.skip("profile has no freeze-clean capture")
+        rows = [
+            json.loads(line)
+            for line in (
+                ROOT / profile["fixtures_freeze_clean"] / "freeze_clean_timeline.jsonl"
+            )
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+
+        controls = [r for r in rows if r["event"] == "control"]
+        for c in controls:
+            assert c["response"]["CleanSwitch"] == c["value"], c["clock"]
+            assert c["response"]["Error"] == 0, c["clock"]
+
+        started, not_started = [], []
+        for c in (c for c in controls if c["value"] == 1):
+            later = [
+                r
+                for r in rows
+                if r["run"] == c["run"]
+                and r["clock"] >= c["clock"]
+                and r.get("unit") == c["unit"]
+                and r["event"] in ("status_response", "control")
+                and r is not c
+            ]
+            window = []
+            for r in later:
+                if r["event"] == "control":
+                    break  # next command to the same unit
+                window.append(r["json"])
+            (
+                started if any(s["CleanStatus"] != 0 for s in window) else not_started
+            ).append(c["clock"])
+        assert (len(started), len(not_started)) == (3, 4), (started, not_started)

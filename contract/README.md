@@ -38,10 +38,10 @@ the drift detector between the code and the wire.
 
 | profile | devices | captured | fixtures |
 |---|---|---|---|
-| [`ac-rad-fw6.0.032`](profiles/ac-rad-fw6.0.032/profile.json) | 3 × Hitachi RAD-series ceiling-embedded air conditioners (different capacities), `DeviceType 1`, `FirmwareId 3`, `FirmwareVersion 6.0.032` | 2026-09-16/17 | `tests/fixtures/observed_2026_09_16/` |
+| [`ac-rad-fw6.0.032`](profiles/ac-rad-fw6.0.032/profile.json) | 3 × Hitachi RAD-series ceiling-embedded air conditioners (different capacities), `DeviceType 1`, `FirmwareId 3`, `FirmwareVersion 6.0.032` | 2026-09-16/17 | `tests/fixtures/observed_2026_09_16/`, freeze clean: `tests/fixtures/observed_2026_09_17_freeze_clean/` |
 
 Not covered by any profile yet: dehumidifiers (`DeviceType 2`), heat exchangers (`3`), PM2.5 panels (`4`),
-any firmware other than 6.0.032, and the `control/response` message for any device. `STATUS_DICT` has DH and
+any firmware other than 6.0.032, and `control/response` for any command other than `CleanSwitch`. `STATUS_DICT` has DH and
 HE tables, but no captured payload backs them in this repository.
 
 ## What the tests enforce
@@ -53,6 +53,7 @@ For every profile in `profiles/`:
   therefore fails the test until someone adds it to the schema with a source.
 - for every field that is also in `STATUS_DICT[<DeviceType>]` as an enum, every observed value is a key of
   its `id2str`; a value the library cannot map fails the test.
+- the freeze-clean timeline (`fixtures_freeze_clean`) still shows every start echoed with `Error 0`, and 3 of the 7 starts actually cleaning.
 - binary fixtures listed in `profile.json` (`non_json_answers`, `nested_mqtt_publish_answer`) still have the
   recorded bytes / structure.
 
