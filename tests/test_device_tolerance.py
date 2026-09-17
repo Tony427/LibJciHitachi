@@ -163,9 +163,7 @@ class TestShadowAnswerFromAnotherClient:
 
     def test_token_of_no_known_device_is_error(self, mqtt, caplog):
         with caplog.at_level(logging.DEBUG):
-            mqtt._on_get_named_shadow_accepted(
-                self._response("not-a-gateway-id")
-            )
+            mqtt._on_get_named_shadow_accepted(self._response("not-a-gateway-id"))
         assert [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     def test_pending_token_is_still_matched(self, mqtt):
@@ -222,6 +220,33 @@ class TestRefreshStatusPerDevice:
         statuses = api.get_status()
         assert list(statuses) == ["Device B"], "never-refreshed devices are skipped"
         assert statuses["Device B"].max_temp == 32
+
+    def test_status_without_support_code_keeps_devices_available(self, api, caplog):
+        """2026-09-17 13:07: every unit answered registration with the frame, status with JSON."""
+        a = api.things["Device A"].thing_name
+        b = api.things["Device B"].thing_name
+        mock = self._mock_mqtt(api, [[a, b], [], [a, b], []])
+        status_a = JciHitachiAWSStatus({"DeviceType": 1, "CleanNotification": 0})
+        status_b = JciHitachiAWSStatus({"DeviceType": 1, "CleanNotification": 0})
+        mock.mqtt_events.device_status = {a: status_a, b: status_b}
+        mock.mqtt_events.device_undecodable = {
+            t: {"registration": (f"{IDENTITY}/{t}/registration/response", BINARY_FRAME)}
+            for t in (a, b)
+        }
+
+        with caplog.at_level(logging.WARNING, logger="JciHitachi.api"):
+            api.refresh_status(refresh_support_code=True)  # no raise
+
+        for name, status in (("Device A", status_a), ("Device B", status_b)):
+            thing = api.things[name]
+            assert thing.available is True
+            assert thing.status_code is status
+            assert thing.support_code is None
+            assert "registration/response" in thing.attention_reason
+            assert "not JSON (hex fcffff1f0101)" in thing.attention_reason
+        assert sorted(api.get_status()) == ["Device A", "Device B"]
+        assert "Device A needs attention" in caplog.text
+        assert "is unavailable" not in caplog.text
 
     def test_all_devices_failing_raises_device_error_listing_each(self, api):
         self._mock_mqtt(api, [[], [], [BaseException, BaseException], []])
