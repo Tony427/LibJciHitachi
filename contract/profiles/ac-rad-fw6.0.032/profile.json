@@ -33,7 +33,8 @@
       "BUT running is not sufficient: at 01:13 on 2026-09-17 the unit that had answered the frame since 23:52 answered JSON again while its status said Mode cool, Switch 1 (Home Assistant showed it cooling at 25 °C); what changed on the unit at that moment is not known",
       "and running is not necessary: on 2026-09-17 from 13:01 (right after a Home Assistant restart) until at least 13:57, all three units answered registration/response with the frame on every poll while all three were idle (status Switch 0, CleanSwitch 0, CleanStatus 0) and their status/response was JSON; two of them had finished a freeze clean at 11:45 and 12:40; at 13:57 one unit answered JSON again, the other two still the frame",
       "not correlated with the official app's freeze-clean prompt (shown for units that answered JSON)",
-      "shadow info still answers JSON for the same unit; status/response was JSON for the running unit in the same poll where its registration/response was the frame"
+      "shadow info still answers JSON for the same unit; status/response was JSON for the running unit in the same poll where its registration/response was the frame",
+      "a control still takes effect while the unit answers registration/response with the frame: on 2026-09-17 15:20 one idle unit whose support code was the frame on every poll got TemperatureSetting 26 and then 25; each control/response echoed the value with Error 0 and the following status/response carried it 7.8 s and 8.9 s after the command"
     ],
     "meaning": "unknown"
   },
