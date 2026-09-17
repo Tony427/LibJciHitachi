@@ -271,6 +271,74 @@ class TestRefreshStatusPerDevice:
         assert api.things["Device A"].attention_reason is None
 
 
+class TestStructuredAttention:
+    """`AWSThing.attention` mirrors `attention_reason`; the English strings stay unchanged."""
+
+    def _api(self, api, execute_result):
+        mock = TestRefreshStatusPerDevice._mock_mqtt(None, api, execute_result)
+        api._things = {"Device A": api.things["Device A"]}
+        return mock
+
+    def test_undecodable_support_code(self, api):
+        a = api.things["Device A"].thing_name
+        mock = self._api(api, [[a], [], [a], []])
+        mock.mqtt_events.device_status = {a: JciHitachiAWSStatus({"DeviceType": 1})}
+        mock.mqtt_events.device_undecodable = {
+            a: {"registration": (f"{IDENTITY}/{a}/registration/response", BINARY_FRAME)}
+        }
+        api.refresh_status(refresh_support_code=True)
+        assert api.things["Device A"].attention == {
+            "request": "support code",
+            "topic": "registration/response",
+            "cause": "undecodable",
+            "payload_length": 6,
+            "payload_hex": "fcffff1f0101",
+        }
+
+    def test_long_payload_hex_is_capped_at_64_bytes(self, api):
+        a = api.things["Device A"].thing_name
+        mock = self._api(api, [[a], [], [a], []])
+        mock.mqtt_events.device_status = {a: JciHitachiAWSStatus({"DeviceType": 1})}
+        long_payload = bytes(range(256)) * 3 + bytes(range(25))  # 793 bytes
+        mock.mqtt_events.device_undecodable = {
+            a: {"registration": (f"{IDENTITY}/{a}/registration/response", long_payload)}
+        }
+        api.refresh_status(refresh_support_code=True)
+        attention = api.things["Device A"].attention
+        assert attention["payload_length"] == 793
+        assert attention["payload_hex"] == long_payload[:64].hex()
+
+    def test_no_data_and_timeout(self, api):
+        a = api.things["Device A"].thing_name
+        mock = self._api(api, [[], [], [a], []])  # status "executed" but nothing stored
+        with pytest.raises(JciHitachiDeviceError):
+            api.refresh_status()
+        thing = api.things["Device A"]
+        assert thing.attention["cause"] == "no_data"
+        assert thing.attention["topic"] == "status/response"
+        assert thing.attention["payload_hex"] is None
+        assert thing.attention_reason == (
+            "An event occurred but wasn't accompanied with data when refreshing Device A status code."
+        )
+
+        mock.execute.return_value = [[], [], [BaseException], []]
+        with pytest.raises(JciHitachiDeviceError):
+            api.refresh_status()
+        assert thing.attention["cause"] == "timeout"
+        assert thing.attention_reason.startswith(
+            "Timed out refreshing Device A status code."
+        )
+
+    def test_cleared_on_success(self, api):
+        a = api.things["Device A"].thing_name
+        mock = self._api(api, [[], [], [a], []])
+        with pytest.raises(JciHitachiDeviceError):
+            api.refresh_status()
+        mock.mqtt_events.device_status = {a: JciHitachiAWSStatus({"DeviceType": 1})}
+        api.refresh_status()
+        assert api.things["Device A"].attention is None
+
+
 class TestThingWithoutSupportCode:
     def test_properties_are_none_safe(self):
         thing = _thing("Device A", GW_A)
