@@ -1211,15 +1211,17 @@ class JciHitachiAWSAPI:
         refresh_shadow : bool, optional
             Whether or not to refresh AWS IoT Shadow, by default False.
 
-        A device that times out or answers with an undecodable payload is marked
-        `available = False` and gets an `attention_reason`; the other devices are refreshed
-        normally. Only when every requested device failed is an exception raised.
+        A device whose status request times out or is answered with an undecodable payload
+        is marked `available = False`; the other devices are refreshed normally. A failed
+        support code or shadow request only sets `attention_reason` and keeps the device
+        available if its status arrived. Only when the status request failed for every
+        requested device is an exception raised.
 
         Raises
         ------
         JciHitachiDeviceError
-            If every requested device failed (subclass of RuntimeError). The message lists
-            each device's reason.
+            If the status request failed for every requested device (subclass of
+            RuntimeError). The message lists each device's reason.
         """
 
         # queue tasks
@@ -1252,7 +1254,11 @@ class JciHitachiAWSAPI:
         for name, thing in self._get_valid_things(device_name):
             requested += 1
             # every channel is stored if it arrived (the shadow often works while the
-            # status/support channel does not); the first failure becomes the reason
+            # status/support channel does not); the first failure becomes the reason.
+            # Only the status channel decides availability: on 2026-09-17 13:07 all three
+            # units of an account answered registration/response with a non-JSON frame on
+            # every poll while status/response was JSON, and treating that as a device
+            # failure discarded the status of every device.
             failures: list[str] = []
             if refresh_support_code:
                 failures.append(
@@ -1278,32 +1284,32 @@ class JciHitachiAWSAPI:
                         lambda v: setattr(thing, "shadow", v),
                     )
                 )
-            failures.append(
-                self._gather_one(
-                    name,
-                    thing,
-                    "status code",
-                    "status",
-                    status_results,
-                    self._mqtt.mqtt_events.device_status,
-                    lambda v: setattr(thing, "status_code", v),
-                )
+            status_failure = self._gather_one(
+                name,
+                thing,
+                "status code",
+                "status",
+                status_results,
+                self._mqtt.mqtt_events.device_status,
+                lambda v: setattr(thing, "status_code", v),
             )
+            failures.append(status_failure)
             reason = next((f for f in failures if f is not None), None)
 
             previous_reason = thing.attention_reason
-            if reason is None:
-                if not thing.available and previous_reason is not None:
-                    _LOGGER.info(f"{name} is available again.")
-                thing.available = True
-                thing.attention_reason = None
-            else:
-                thing.available = False
-                thing.attention_reason = reason
+            was_available = thing.available
+            thing.available = status_failure is None
+            thing.attention_reason = reason
+            if thing.available and not was_available and previous_reason is not None:
+                _LOGGER.info(f"{name} is available again.")
+            if status_failure is not None:
                 reasons.append(reason)
-                # log on change only; a permanently failing device would otherwise
-                # produce one line per poll
-                if reason != previous_reason:
+            # log on change only; a permanently failing device would otherwise
+            # produce one line per poll
+            if reason is not None and reason != previous_reason:
+                if thing.available:
+                    _LOGGER.warning(f"{name} needs attention: {reason}")
+                else:
                     _LOGGER.warning(f"{name} is unavailable: {reason}")
 
         if requested and len(reasons) == requested:
