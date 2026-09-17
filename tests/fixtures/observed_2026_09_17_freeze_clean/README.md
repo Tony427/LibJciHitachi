@@ -62,8 +62,9 @@ official app briefly once; nothing in the log changed at that moment.
   (`CleanStatus` leaving 0 within about one second) told them apart.
 - **Values seen.** `CleanStatus` went 0 → 1 → 2 on all three accepted starts, and back to 0 at the end
   of both completed cleans and at the interrupt. It stayed 1 for at most 28 s. `CleanNotification` went to 0 part-way through, about 33 min (A) and 25 min (B) after the
-  command, not at the end. What 1 and 2 stand for is not stated by the cloud. The library and the
-  Home Assistant integration show them as raw numbers.
+  command, not at the end. What 1 and 2 stand for is not stated by the cloud. The library reports
+  the raw number. The Home Assistant integration names them from this sequence (idle, starting,
+  cleaning) and keeps the raw number as an attribute.
 - **Rejected start while another unit cleaned (10:19:32).** This matches the clause for one-to-many
   systems in these indoor units' owner's manual (only one indoor unit can freeze clean at a time). The manual clause
   is recorded in `contract/profiles/ac-rad-fw6.0.032/profile.json`. It is a property of this system,
