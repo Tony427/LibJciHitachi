@@ -640,6 +640,7 @@ class AWSThing:
         self._json: dict = thing_json
         self._available: bool = True
         self._attention_reason: Optional[str] = None
+        self._attention: Optional[dict] = None
         self._shadow: Optional[dict] = None
         self._status_code: Optional[JciHitachiAWSStatus] = None
         self._support_code: Optional[JciHitachiAWSStatusSupport] = None
@@ -733,6 +734,36 @@ class AWSThing:
     @attention_reason.setter
     def attention_reason(self, x: Optional[str]) -> None:
         self._attention_reason = x
+
+    @property
+    def attention(self) -> Optional[dict]:
+        """Structured form of `attention_reason`, or None when the last refresh succeeded.
+
+        Keys:
+
+        - ``request``: ``"support code"``, ``"status code"`` or ``"shadow"``
+        - ``topic``: the answer topic (``"registration/response"``, ``"status/response"``) or
+          ``"shadow/name/info/get"``
+        - ``cause``: ``"undecodable"`` (an answer arrived that is not JSON), ``"no_data"`` (no
+          JSON answer arrived in this refresh) or ``"timeout"`` (sending the request failed)
+        - ``payload_length`` / ``payload_hex``: size of the undecodable answer and the hex of at
+          most its first 64 bytes; None for the other causes
+
+        ``no_data`` is what a timeout of the answer looks like with this library: the waiter in
+        `JciHitachiAWSMqttConnection.publish()` does not check the result of ``Event.wait()``,
+        so a request that got no answer still counts as executed.
+
+        Returns
+        -------
+        dict or None
+            See above.
+        """
+
+        return self._attention
+
+    @attention.setter
+    def attention(self, x: Optional[dict]) -> None:
+        self._attention = x
 
     # Last control round trip, kept for diagnostics (set by JciHitachiAWSAPI.set_status()):
     # the request that was sent, when, and the raw answer (dict if JSON, bytes if not,
@@ -1259,7 +1290,7 @@ class JciHitachiAWSAPI:
             # units of an account answered registration/response with a non-JSON frame on
             # every poll while status/response was JSON, and treating that as a device
             # failure discarded the status of every device.
-            failures: list[str] = []
+            failures: list[Optional[tuple[str, dict]]] = []
             if refresh_support_code:
                 failures.append(
                     self._gather_one(
@@ -1294,12 +1325,14 @@ class JciHitachiAWSAPI:
                 lambda v: setattr(thing, "status_code", v),
             )
             failures.append(status_failure)
-            reason = next((f for f in failures if f is not None), None)
+            first = next((f for f in failures if f is not None), None)
+            reason = first[0] if first is not None else None
 
             previous_reason = thing.attention_reason
             was_available = thing.available
             thing.available = status_failure is None
             thing.attention_reason = reason
+            thing.attention = first[1] if first is not None else None
             if thing.available and not was_available and previous_reason is not None:
                 _LOGGER.info(f"{name} is available again.")
             if status_failure is not None:
@@ -1324,8 +1357,8 @@ class JciHitachiAWSAPI:
         results: Optional[list],
         data: dict,
         store,
-    ) -> Optional[str]:
-        """Store one device's `what` result; return a reason string on failure, None on success.
+    ) -> Optional[tuple[str, dict]]:
+        """Store one device's `what` result; return (reason, attention) on failure, None on success.
 
         `kind` is the MQTT topic kind (`registration`, `status`) used to look up an undecodable
         answer recorded by the connection; None for the shadow, which has no such record.
@@ -1348,10 +1381,31 @@ class JciHitachiAWSAPI:
                 # means is unknown (seen as fc ff ff 1f 01 01 from RAD-series ACs, 2026-08/09).
                 return (
                     f"{name} answered the {what} request on {kind}/response with a "
-                    f"payload that is not JSON (hex {payload.hex()}); its meaning is unknown."
+                    f"payload that is not JSON (hex {payload.hex()}); its meaning is unknown.",
+                    self._attention(what, kind, "undecodable", payload),
                 )
-            return f"An event occurred but wasn't accompanied with data when refreshing {name} {what}."
-        return f"Timed out refreshing {name} {what}. Please ensure the device is online and avoid opening the official app."
+            return (
+                f"An event occurred but wasn't accompanied with data when refreshing {name} {what}.",
+                self._attention(what, kind, "no_data"),
+            )
+        return (
+            f"Timed out refreshing {name} {what}. Please ensure the device is online and avoid opening the official app.",
+            self._attention(what, kind, "timeout"),
+        )
+
+    @staticmethod
+    def _attention(
+        what: str, kind: Optional[str], cause: str, payload: Optional[bytes] = None
+    ) -> dict:
+        """Structured reason for `AWSThing.attention` (see there for the keys)."""
+
+        return {
+            "request": what,
+            "topic": f"{kind}/response" if kind is not None else "shadow/name/info/get",
+            "cause": cause,
+            "payload_length": len(payload) if payload is not None else None,
+            "payload_hex": payload[:64].hex() if payload is not None else None,
+        }
 
     def get_status(
         self, device_name: Optional[str] = None, legacy: bool = False
