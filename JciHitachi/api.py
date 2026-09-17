@@ -1523,6 +1523,10 @@ class JciHitachiAWSAPI:
             return False
 
         thing.last_control_response = dict(device_control)
+        # The echo means the cloud accepted the request, not that the device carried it out:
+        # on 2026-09-17 four CleanSwitch=1 commands were echoed with Error 0 while the units
+        # stayed idle (contract/profiles/ac-rad-fw6.0.032, freeze_clean). The value cached below
+        # is replaced by the device's own value on the next refresh_status.
         if device_control.get(status_name) == status_value:
             thing.status_code.set_new_status(status_name, status_value)
             return True

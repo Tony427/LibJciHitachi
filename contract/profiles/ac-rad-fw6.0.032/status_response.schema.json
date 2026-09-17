@@ -51,22 +51,26 @@
         "controllable": false,
         "kind": "numeric"
       },
-      "x-note": "status: 1 on exactly the two units for which the official app showed the freeze-clean prompt, 0 on the third (2026-09-16); registration: 3 (support mask)"
+      "x-note": "status: 1 on exactly the two units for which the official app showed the freeze-clean prompt, 0 on the third (2026-09-16); went 1 -> 0 part-way through a freeze clean, 33 and 25 min after the command on the two units, not at its end (2026-09-17, tests/fixtures/observed_2026_09_17_freeze_clean/freeze_clean_timeline.jsonl); registration: 3 (support mask)"
     },
     "CleanStatus": {
       "type": "integer",
       "x-observed-values": [
-        0
+        0,
+        1,
+        2
       ],
       "x-library": {
         "controllable": false,
         "kind": "numeric"
-      }
+      },
+      "x-note": "observed sequence on every accepted start: 0 -> 1 within about 1 s of the command, 1 -> 2 at most 28 s later, 2 -> 0 when the clean ended or was interrupted. What 1 and 2 stand for is not stated by the cloud; shown raw by the library (tests/fixtures/observed_2026_09_17_freeze_clean/freeze_clean_timeline.jsonl)"
     },
     "CleanSwitch": {
       "type": "integer",
       "x-observed-values": [
-        0
+        0,
+        1
       ],
       "x-library": {
         "controllable": true,
@@ -76,7 +80,8 @@
           "1": "on"
         },
         "legacy_name": "freeze_clean"
-      }
+      },
+      "x-note": "1 from the first status answer after an accepted start until the clean ended; stayed 0 after starts the unit did not carry out (tests/fixtures/observed_2026_09_17_freeze_clean/freeze_clean_timeline.jsonl, not a schema source: WiFiSSID was dropped there)"
     },
     "ControlTone": {
       "type": "integer",
