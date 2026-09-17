@@ -59,8 +59,8 @@ For every profile in `profiles/`:
 
 ## How to add what you observe
 
-1. Run the probe with the fork installed (see `scripts/jcihitachi/probe.py` in the reporter's repository, or
-   hook `JciHitachiAWSMqttConnection._on_publish` yourself) and save raw payloads **outside** any repository.
+1. Log in with this library and hook `JciHitachiAWSMqttConnection._on_publish` (and, for shadows,
+   `_on_get_named_shadow_accepted`) to save raw payloads **outside** any repository.
 2. Replace identifiers (see rule 4). Keep bytes otherwise untouched; keep the raw `0xFF` in `Model` if you have it.
 3. Put the files under `tests/fixtures/observed_<date>/` with a README stating device family, count, firmware,
    library version, app version, and a timeline of anything unusual.
